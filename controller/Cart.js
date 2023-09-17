@@ -2,7 +2,7 @@ const { Cart } = require("../model/Cart");
 
 exports.fetchCartByUser = async (req, res) => {
     try {
-        const cart = await Cart.find({ user: req.query.user })
+        const cart = await Cart.find({ user: req.user.id })
             .populate("user")
             .populate("product");
         res.status(201).json(cart);
@@ -13,7 +13,7 @@ exports.fetchCartByUser = async (req, res) => {
 
 exports.addToCart = async (req, res) => {
     try {
-        const cart = new Cart(req.body);
+        const cart = new Cart({ ...req.body, user: req.user.id });
         const doc = await cart.save();
         const result = await doc.populate("product");
         res.status(201).json(result);
@@ -33,7 +33,9 @@ exports.deleteFromCart = async (req, res) => {
 
 exports.updateCart = async (req, res) => {
     try {
-        const cart = await Cart.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        const cart = await Cart.findByIdAndUpdate(req.params.id, req.body, {
+            new: true,
+        });
         const result = await cart.populate("product");
         res.status(201).json(result);
     } catch (err) {
