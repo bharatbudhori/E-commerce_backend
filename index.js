@@ -1,3 +1,4 @@
+require("dotenv").config();
 const express = require("express");
 const server = express();
 const jwt = require("jsonwebtoken");
@@ -17,26 +18,78 @@ const passport = require("passport");
 const session = require("express-session");
 const LocalStrategy = require("passport-local").Strategy;
 const User = require("./model/User");
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const {
     isAuthenticated,
     sanitizeUser,
     cookieExtractor,
 } = require("./services/common");
+const path = require("path");
 
-const SECRET_KEY = "SECRET_KEY";
+const endpointSecret = process.env.ENDPOINT_SECRET;
+
+server.post(
+    "/webhook",
+    express.raw({ type: "application/json" }),
+    (request, response) => {
+        let event = request.body;
+        // Only verify the event if you have an endpoint secret defined.
+        // Otherwise use the basic event deserialized with JSON.parse
+        if (endpointSecret) {
+            // Get the signature sent by Stripe
+            const signature = request.headers["stripe-signature"];
+            try {
+                event = stripe.webhooks.constructEvent(
+                    request.body,
+                    signature,
+                    endpointSecret
+                );
+            } catch (err) {
+                console.log(
+                    `⚠️  Webhook signature verification failed.`,
+                    err.message
+                );
+                return response.sendStatus(400);
+            }
+        }
+
+        // Handle the event
+        switch (event.type) {
+            case "payment_intent.succeeded":
+                const paymentIntent = event.data.object;
+                console.log(
+                    `PaymentIntent for ${paymentIntent.amount} was successful!`
+                );
+                // Then define and call a method to handle the successful payment intent.
+                // handlePaymentIntentSucceeded(paymentIntent);
+                break;
+            case "payment_method.attached":
+                const paymentMethod = event.data.object;
+                // Then define and call a method to handle the successful attachment of a PaymentMethod.
+                // handlePaymentMethodAttached(paymentMethod);
+                break;
+            default:
+                // Unexpected event type
+                console.log(`Unhandled event type ${event.type}.`);
+        }
+
+        // Return a 200 response to acknowledge receipt of the event
+        response.send();
+    }
+);
 
 const opts = {};
 opts.jwtFromRequest = cookieExtractor;
-opts.secretOrKey = SECRET_KEY;
+opts.secretOrKey = process.env.JWT_SECRET_KEY;
 
 require("./controller/Database");
 
-server.use(express.static("build"));
+server.use(express.static(path.resolve(__dirname, "build")));
 server.use(cookieParser());
 
 server.use(
     session({
-        secret: "secret",
+        secret: process.env.SESSION_SECRET_KEY,
         resave: false,
         saveUninitialized: false,
         // store: new MongoStore({ mongooseConnection: mongoose.connection }),
@@ -49,6 +102,8 @@ server.use(
         exposedHeaders: ["X-Total-Count"],
     })
 );
+
+// server.use(express.raw({ type: "application/json" }));
 server.use(express.json());
 server.use("/products", isAuthenticated(), productsRouters.routes);
 server.use("/categories", isAuthenticated(), categoriesRouters.routes);
@@ -84,7 +139,10 @@ passport.use(
                     ) {
                         done(null, false, { message: "Invalid Credentials" });
                     } else {
-                        const token = jwt.sign(sanitizeUser(user), SECRET_KEY);
+                        const token = jwt.sign(
+                            sanitizeUser(user),
+                            process.env.JWT_SECRET_KEY
+                        );
                         done(null, { token });
                     }
                 }
@@ -126,10 +184,26 @@ passport.deserializeUser(function (user, cb) {
     });
 });
 
+//stripe payment
+
+server.post("/create-payment-intent", async (req, res) => {
+    const { items } = req.body;
+    const paymentIntent = await stripe.paymentIntents.create({
+        amount: req.body.totalAmount * 100,
+        currency: "inr",
+        automatic_payment_methods: {
+            enabled: true,
+        },
+    });
+    res.send({
+        clientSecret: paymentIntent.client_secret,
+    });
+});
+
 server.get("/", (req, res) => {
     res.json({ message: "Hello World" });
 });
 
-server.listen(8080, () => {
+server.listen(process.env.PORT, () => {
     console.log("Server is running...");
 });
